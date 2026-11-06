@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/seuros/election_machines/compare/election-machines-v0.2.0...election-machines-v0.2.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* keep test sources out of the packaged gem and crate ([27f00f1](https://github.com/seuros/election_machines/commit/27f00f1331d641a7d324ee7e560324a99f958bfa))
+
 ## [0.2.0](https://github.com/seuros/election_machines/compare/election-machines-v0.1.0...election-machines-v0.2.0) (2026-11-06)
 
 
