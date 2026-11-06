@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.5](https://github.com/seuros/election_machines/compare/election_machines/v0.1.4...election_machines/v0.1.5) (2026-11-06)
+
+
+### Bug Fixes
+
+* extract Wrapper::advance for election revision handling ([09bdd65](https://github.com/seuros/election_machines/commit/09bdd65226a7780bfe980bf19e5145ee2c2f1da0))
+
 ## [0.1.4](https://github.com/seuros/election_machines/compare/election_machines/v0.1.3...election_machines/v0.1.4) (2026-11-06)
 
 
