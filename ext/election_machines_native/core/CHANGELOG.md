@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/seuros/election_machines/compare/election-machines-v0.2.1...election-machines-v0.2.2) (2026-11-06)
+
+
+### Bug Fixes
+
+* crates.io keywords and categories for the core ([8c6d66c](https://github.com/seuros/election_machines/commit/8c6d66cc9ff19907ad68dc4043c9e421a66037ad))
+
 ## [0.2.1](https://github.com/seuros/election_machines/compare/election-machines-v0.2.0...election-machines-v0.2.1) (2026-11-06)
 
 
