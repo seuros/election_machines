@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/seuros/election_machines/compare/election_machines/v0.1.3...election_machines/v0.1.4) (2026-11-06)
+
+
+### Bug Fixes
+
+* require lease-machines 0.3 ([d99d292](https://github.com/seuros/election_machines/commit/d99d2928ba0dd42e3013eb2d13e9a527387703ee))
+
 ## [0.1.3](https://github.com/seuros/election_machines/compare/election_machines/v0.1.2...election_machines/v0.1.3) (2026-11-06)
 
 
