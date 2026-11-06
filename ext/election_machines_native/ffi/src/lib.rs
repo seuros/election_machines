@@ -49,6 +49,14 @@ impl Wrapper {
         let revision = self.state.borrow().1.checked_add(1);
         revision.ok_or_else(|| Error::new(ruby.exception_range_error(), "revision exhausted"))
     }
+    /// Runs `step` against the election under the next revision, which stales
+    /// every checkpoint taken before it.
+    fn advance<T>(&self, ruby: &Ruby, step: impl FnOnce(&mut Election) -> T) -> Result<T, Error> {
+        let revision = self.next_revision(ruby)?;
+        let mut state = self.state.borrow_mut();
+        state.1 = revision;
+        Ok(step(&mut state.0))
+    }
     fn elect(
         ruby: &Ruby,
         rb_self: Obj<Self>,
@@ -69,12 +77,9 @@ impl Wrapper {
         for (index, owner) in owners[..count].iter_mut().enumerate() {
             *owner = OwnerId::new(candidates.entry::<Id>(index.cast_signed())?.0);
         }
-        let revision = rb_self.next_revision(ruby)?;
-        let result = {
-            let mut state = rb_self.state.borrow_mut();
-            state.1 = revision;
-            state.0.elect(&owners[..count], now.0, ttl.0)
-        };
+        let result = rb_self.advance(ruby, |election| {
+            election.elect(&owners[..count], now.0, ttl.0)
+        })?;
         Ok(match result {
             Leadership::Elected(lease) => lease_outcome("elected", lease),
             Leadership::Incumbent(lease) => lease_outcome("incumbent", lease),
@@ -94,14 +99,9 @@ impl Wrapper {
         rb_self.check_frozen()?;
         values::interval(ruby, now, ttl)?;
         let token = values::token(ruby, token)?;
-        let revision = rb_self.next_revision(ruby)?;
-        let result = {
-            let mut state = rb_self.state.borrow_mut();
-            state.1 = revision;
-            state
-                .0
-                .heartbeat(OwnerId::new(owner.0), token, now.0, ttl.0)
-        };
+        let result = rb_self.advance(ruby, |election| {
+            election.heartbeat(OwnerId::new(owner.0), token, now.0, ttl.0)
+        })?;
         Ok(decision(result))
     }
     fn resign(
@@ -113,12 +113,9 @@ impl Wrapper {
     ) -> Result<Outcome, Error> {
         rb_self.check_frozen()?;
         let token: FencingToken = values::token(ruby, token)?;
-        let revision = rb_self.next_revision(ruby)?;
-        let result = {
-            let mut state = rb_self.state.borrow_mut();
-            state.1 = revision;
-            state.0.resign(OwnerId::new(owner.0), token, now.0)
-        };
+        let result = rb_self.advance(ruby, |election| {
+            election.resign(OwnerId::new(owner.0), token, now.0)
+        })?;
         Ok(decision(result))
     }
     fn checkpoint(&self) -> Saved {
