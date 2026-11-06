@@ -1,0 +1,15 @@
+module ElectionMachines
+  VERSION: String
+  type outcome = [String, Integer?, Integer?, Float?]
+  class Checkpoint
+  end
+  class Election
+    def self.new: () -> Election
+    def elect: (Array[Integer], Integer | Float, Integer | Float) -> outcome
+    def heartbeat: (Integer, Integer, Integer | Float, Integer | Float) -> outcome
+    def resign: (Integer, Integer, Integer | Float) -> outcome
+    def checkpoint: () -> Checkpoint
+    def restore!: (Checkpoint) -> bool
+    def lease: () -> [Integer, Integer, Float]?
+  end
+end
