@@ -1,15 +1,164 @@
 module ElectionMachines
   VERSION: String
-  type outcome = [String, Integer?, Integer?, Float?]
-  class Checkpoint
+  REFUSALS: Array[Symbol]
+  CLOCK_POLICIES: Array[Symbol]
+
+  # Integer nanoseconds on one monotonic clock, for instants (now, expires_at,
+  # observed) and spans (ttl) alike:
+  # Process.clock_gettime(Process::CLOCK_MONOTONIC, :nanosecond). A non-Integer
+  # raises TypeError; a negative value, or one past 2**64 seconds, RangeError.
+  type nanoseconds = Integer
+  # An Integer in 0..65_535; TypeError for a non-Integer, RangeError outside.
+  type scope = Integer
+  # An Integer in 0..2**64-1, the caller's own number for a candidate.
+  type owner = Integer
+  type clock_policy = :reject | :clamp
+  # Every symbol that means "this call was not honoured and changed nothing",
+  # and exactly REFUSALS: no catch-all, and none an election cannot answer.
+  # :no_candidates is the core's `Refusal::NoCandidates`. The rest are the
+  # core's `Refusal::Lease(reason)`, answered as the lease core's own symbol
+  # for `reason`. The lease core's :occupied and :held never arrive (a live
+  # leader is the honoured Incumbent), nor do :fenced and :out_of_phase (the
+  # lease holder's). Each method below lists exactly the ones it can answer.
+  type refusal = :no_candidates | :no_lease | :wrong_owner | :stale_token | :unknown | :expired
+               | :clock_regressed | :invalid_ttl | :exhausted
+  # What heartbeat and resign can answer for the owner, token and clock.
+  # :unknown is a token this election never issued, which includes every token
+  # of another scope; :stale_token is one it issued that is no longer in force.
+  type held_refusal = :unknown | :clock_regressed | :no_lease | :wrong_owner | :stale_token | :expired
+  # The core's `Leadership`: both are honoured, Incumbent changed nothing.
+  type leadership = Elected | Incumbent
+
+  # Anything read as a fencing token: this gem's FencingToken, or the
+  # `lease_machines` gem's. A bare Integer is not one (TypeError).
+  interface _FencingToken
+    def raw: () -> Integer
   end
+
+  # Anything read as a lease: this gem's Lease, or the `lease_machines` gem's.
+  interface _Lease
+    def owner: () -> owner
+    def token: () -> _FencingToken
+    def expires_at: () -> nanoseconds
+  end
+
+  # Anything read as a checkpoint: this gem's, or the `lease_machines` gem's.
+  interface _Checkpoint
+    def scope: () -> scope
+    def issued: () -> Integer
+    def lease: () -> _Lease?
+    def observed: () -> nanoseconds
+  end
+
+  class FencingToken < Data
+    # Scope in the top 16 bits above a sequence number counted from 1.
+    attr_reader raw: Integer
+    # TypeError for a non-Integer; RangeError outside 1..2**64-1 or when the
+    # sequence number is zero.
+    def self.new: (Integer raw) -> FencingToken
+                | (raw: Integer) -> FencingToken
+    def self.from_raw: (Integer raw) -> FencingToken
+    def scope: () -> scope
+    # nil across scopes: such tokens are not comparable.
+    def order: (_FencingToken other) -> (-1 | 0 | 1)?
+    # False across scopes.
+    def newer_than?: (_FencingToken other) -> bool
+  end
+
+  class Lease < Data
+    attr_reader owner: owner
+    attr_reader token: FencingToken
+    attr_reader expires_at: nanoseconds
+    def self.new: (owner owner, FencingToken token, nanoseconds expires_at) -> Lease
+                | (owner: owner, token: FencingToken, expires_at: nanoseconds) -> Lease
+  end
+
+  class Checkpoint < Data
+    attr_reader scope: scope
+    # Tokens issued so far, resignations included; the next is `issued + 1`.
+    attr_reader issued: Integer
+    attr_reader lease: _Lease?
+    attr_reader observed: nanoseconds
+    # RangeError when `issued` is past 2**48-1, or `lease` does not carry
+    # token number `issued` of `scope`.
+    def self.new: (scope scope, Integer issued, _Lease? lease, nanoseconds observed) -> Checkpoint
+                | (scope: scope, issued: Integer, lease: _Lease?, observed: nanoseconds) -> Checkpoint
+    def self.from_parts: (scope scope, Integer issued, _Lease? lease, nanoseconds observed) -> Checkpoint
+  end
+
+  class Elected < Data
+    attr_reader lease: Lease
+    def self.new: (Lease lease) -> Elected
+                | (lease: Lease) -> Elected
+    def incumbent?: () -> false
+  end
+
+  class Incumbent < Data
+    attr_reader lease: Lease
+    def self.new: (Lease lease) -> Incumbent
+                | (lease: Lease) -> Incumbent
+    def incumbent?: () -> true
+  end
+
+  # The core's `Election`. Honoured answers come first in every return type,
+  # then the refusals that method can answer. A refusal changes nothing, the
+  # observed clock included. Every mutating call raises FrozenError on a
+  # frozen election.
   class Election
+    # A fresh token namespace in scope zero.
     def self.new: () -> Election
-    def elect: (Array[Integer], Integer | Float, Integer | Float) -> outcome
-    def heartbeat: (Integer, Integer, Integer | Float, Integer | Float) -> outcome
-    def resign: (Integer, Integer, Integer | Float) -> outcome
+    # A fresh token namespace whose tokens carry `scope`.
+    def self.with_scope: (scope scope) -> Election
+    # RangeError when `checkpoint` is of another scope. TypeError unless
+    # `clock_policy` is a Symbol, ArgumentError unless :reject or :clamp.
+    def self.restored: (scope scope, _Checkpoint checkpoint, clock_policy clock_policy) -> Election
+    # Changes this election and answers it.
+    def with_clock_policy: (clock_policy clock_policy) -> self
+    def clock_policy: () -> clock_policy
+    def scope: () -> scope
+    def issued: () -> Integer
+    # The last leadership granted; it may have expired. nil after a resignation.
+    def lease: () -> Lease?
     def checkpoint: () -> Checkpoint
-    def restore!: (Checkpoint) -> bool
-    def lease: () -> [Integer, Integer, Float]?
+    # Elected: the smallest candidate, under a new token. Incumbent: a live
+    # leader stays, whoever the candidates were; nothing changed.
+    # :no_candidates for an empty Array, checked before the clock.
+    def elect: (Array[owner] candidates, nanoseconds now, nanoseconds ttl)
+               -> (leadership | :no_candidates | :clock_regressed | :invalid_ttl | :exhausted)
+    # The renewed Lease, under the same token. A repeat is honoured and never
+    # shortens the lease.
+    def heartbeat: (owner owner, _FencingToken token, nanoseconds now, nanoseconds ttl)
+                   -> (Lease | held_refusal | :invalid_ttl)
+    # The Lease that was given up. A repeat is :no_lease.
+    def resign: (owner owner, _FencingToken token, nanoseconds now) -> (Lease | held_refusal)
+
+    private
+
+    type row = [Integer, Integer, Integer]
+    type saved = [Integer, Integer, row?, Integer]
+    def self.native_with_scope: (Integer) -> Election
+    def self.native_restored: (Integer, saved, Symbol) -> Election
+    def native_with_clock_policy: (Symbol) -> nil
+    def native_lease: () -> row?
+    def native_checkpoint: () -> saved
+    def native_elect: (Array[Integer], Integer, Integer) -> ([bool, row] | refusal)
+    def native_heartbeat: (Integer, Integer, Integer, Integer) -> (row | refusal)
+    def native_resign: (Integer, Integer, Integer) -> (row | refusal)
+    def decided: (row | refusal) -> (Lease | refusal)
+  end
+
+  private
+
+  def self.native_token_scope: (Integer) -> Integer
+  def self.native_token_order: (Integer, Integer) -> (-1 | 0 | 1)?
+  def self.native_token_newer: (Integer, Integer) -> bool
+  def self.native_checkpoint: ([Integer, Integer, [Integer, Integer, Integer]?, Integer]) -> nil
+
+  module Rows
+    def self?.read: (untyped value, Symbol reader, String what) -> untyped
+    def self?.raw: (_FencingToken) -> Integer
+    def self?.lease: (_Lease) -> [Integer, Integer, Integer]
+    def self?.to_lease: ([Integer, Integer, Integer]) -> Lease
+    def self?.checkpoint: (_Checkpoint) -> [Integer, Integer, [Integer, Integer, Integer]?, Integer]
   end
 end

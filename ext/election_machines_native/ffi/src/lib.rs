@@ -1,154 +1,135 @@
-//! Thin Ruby translation for lease-backed nomination.
+//! Thin binding to lease-backed nomination; no storage, clocks or I/O.
+mod election;
 mod init;
-mod values;
-use election_machines::{Election, Leadership};
-use lease_machines::{Checkpoint, Decision, FencingToken, Lease, OwnerId};
-use magnus::{Error, RArray, Ruby, prelude::*, typed_data::Obj};
-use std::{cell::RefCell, sync::Arc};
-use values::{Id, Seconds};
+mod names;
 
-type Outcome = (String, Option<u64>, Option<u64>, Option<f64>);
+use std::{cmp::Ordering, time::Duration};
 
-#[magnus::wrap(class = "ElectionMachines::Checkpoint", free_immediately, size)]
-struct Saved {
-    owner: Arc<()>,
-    revision: u64,
-    checkpoint: Checkpoint,
-}
-#[magnus::wrap(class = "ElectionMachines::Election", free_immediately, size)]
-struct Wrapper {
-    owner: Arc<()>,
-    state: RefCell<(Election, u64)>,
+use election_machines::{Checkpoint, FencingToken, Lease, OwnerId};
+use magnus::{Error, Integer, IntoValue, Ruby, TryConvert, Value};
+
+const NANOS_PER_SECOND: u128 = 1_000_000_000;
+
+fn integer(value: Value, what: &str) -> Result<Integer, Error> {
+    Integer::from_value(value).ok_or_else(|| {
+        Error::new(
+            Ruby::get_with(value).exception_type_error(),
+            format!("{what} must be an Integer"),
+        )
+    })
 }
 
-fn lease_outcome(status: &str, lease: Lease) -> Outcome {
+fn out_of_range(value: Value, message: &'static str) -> Error {
+    Error::new(Ruby::get_with(value).exception_range_error(), message)
+}
+
+/// An unsigned 64-bit Integer: an owner, a count.
+#[derive(Clone, Copy)]
+struct Number(u64);
+
+impl TryConvert for Number {
+    fn try_convert(value: Value) -> Result<Self, Error> {
+        integer(value, "value")?;
+        u64::try_convert(value)
+            .map(Self)
+            .map_err(|_| out_of_range(value, "value must be in 0..=2**64-1"))
+    }
+}
+
+/// A scope: an Integer in `0..=65535`.
+#[derive(Clone, Copy)]
+struct Scope(u16);
+
+impl TryConvert for Scope {
+    fn try_convert(value: Value) -> Result<Self, Error> {
+        integer(value, "scope")?;
+        u16::try_convert(value)
+            .map(Self)
+            .map_err(|_| out_of_range(value, "scope must be in 0..=65535"))
+    }
+}
+
+/// An instant or a span: Integer nanoseconds, anything a `Duration` holds.
+#[derive(Clone, Copy)]
+struct Nanos(Duration);
+
+impl TryConvert for Nanos {
+    fn try_convert(value: Value) -> Result<Self, Error> {
+        let range = "time must be nanoseconds in 0..2**64 seconds";
+        let nanos = integer(value, "time in nanoseconds")?
+            .to_u128()
+            .map_err(|_| out_of_range(value, range))?;
+        let seconds =
+            u64::try_from(nanos / NANOS_PER_SECOND).map_err(|_| out_of_range(value, range))?;
+        let rest =
+            u32::try_from(nanos % NANOS_PER_SECOND).map_err(|_| out_of_range(value, range))?;
+        Ok(Self(Duration::new(seconds, rest)))
+    }
+}
+
+/// A fencing token as its raw Integer: scope above a positive sequence.
+#[derive(Clone, Copy)]
+struct Token(FencingToken);
+
+impl TryConvert for Token {
+    fn try_convert(value: Value) -> Result<Self, Error> {
+        let range = "token must be in 1..=2**64-1 with a positive sequence number";
+        integer(value, "token")?;
+        let raw = u64::try_convert(value).map_err(|_| out_of_range(value, range))?;
+        FencingToken::from_raw(raw)
+            .map(Self)
+            .ok_or_else(|| out_of_range(value, range))
+    }
+}
+
+/// A lease as `[owner, token, expires_at]`.
+type Row = (Number, Token, Nanos);
+
+/// A checkpoint as `[scope, issued, lease, observed]`, lease `nil` or a row.
+type Saved = (Scope, Number, Option<Row>, Nanos);
+
+fn row(ruby: &Ruby, lease: Lease) -> Value {
     (
-        status.into(),
-        Some(lease.owner().value()),
-        Some(lease.token().value()),
-        Some(lease.expires_at().as_secs_f64()),
+        lease.owner().value(),
+        lease.token().raw(),
+        lease.expires_at().as_nanos(),
     )
+        .into_value_with(ruby)
 }
-fn decision(result: Decision) -> Outcome {
-    match result {
-        Decision::Granted(lease) => lease_outcome("granted", lease),
-        Decision::Renewed(lease) => lease_outcome("renewed", lease),
-        Decision::Released => ("released".into(), None, None, None),
-        Decision::Rejected(reason) => (format!("{reason:?}"), None, None, None),
-        _ => ("unknown".into(), None, None, None),
-    }
+
+/// `Checkpoint::from_parts`, or the `RangeError` its `None` stands for.
+fn checkpoint(ruby: &Ruby, saved: Saved) -> Result<Checkpoint, Error> {
+    let (scope, issued, held, observed) = saved;
+    let held = held.map(|row| Lease::new(OwnerId::new(row.0.0), row.1.0, row.2.0));
+    Checkpoint::from_parts(scope.0, issued.0, held, observed.0).ok_or_else(|| {
+        Error::new(
+            ruby.exception_range_error(),
+            "issued is beyond the scope's token space, or the lease is not the grant \
+             that history ends with",
+        )
+    })
 }
-impl Wrapper {
-    fn new() -> Self {
-        Self {
-            owner: Arc::new(()),
-            state: RefCell::new((Election::default(), 0)),
-        }
-    }
-    fn next_revision(&self, ruby: &Ruby) -> Result<u64, Error> {
-        let revision = self.state.borrow().1.checked_add(1);
-        revision.ok_or_else(|| Error::new(ruby.exception_range_error(), "revision exhausted"))
-    }
-    /// Runs `step` against the election under the next revision, which stales
-    /// every checkpoint taken before it.
-    fn advance<T>(&self, ruby: &Ruby, step: impl FnOnce(&mut Election) -> T) -> Result<T, Error> {
-        let revision = self.next_revision(ruby)?;
-        let mut state = self.state.borrow_mut();
-        state.1 = revision;
-        Ok(step(&mut state.0))
-    }
-    fn elect(
-        ruby: &Ruby,
-        rb_self: Obj<Self>,
-        candidates: RArray,
-        now: Seconds,
-        ttl: Seconds,
-    ) -> Result<Outcome, Error> {
-        rb_self.check_frozen()?;
-        values::interval(ruby, now, ttl)?;
-        let count = candidates.len();
-        if count > 64 {
-            return Err(Error::new(
-                ruby.exception_arg_error(),
-                "at most 64 candidates",
-            ));
-        }
-        let mut owners = [OwnerId::new(0); 64];
-        for (index, owner) in owners[..count].iter_mut().enumerate() {
-            *owner = OwnerId::new(candidates.entry::<Id>(index.cast_signed())?.0);
-        }
-        let result = rb_self.advance(ruby, |election| {
-            election.elect(&owners[..count], now.0, ttl.0)
-        })?;
-        Ok(match result {
-            Leadership::Elected(lease) => lease_outcome("elected", lease),
-            Leadership::Incumbent(lease) => lease_outcome("incumbent", lease),
-            Leadership::NoCandidates => ("no_candidates".into(), None, None, None),
-            Leadership::Rejected(reason) => (format!("{reason:?}"), None, None, None),
-            _ => ("unknown".into(), None, None, None),
-        })
-    }
-    fn heartbeat(
-        ruby: &Ruby,
-        rb_self: Obj<Self>,
-        owner: Id,
-        token: Id,
-        now: Seconds,
-        ttl: Seconds,
-    ) -> Result<Outcome, Error> {
-        rb_self.check_frozen()?;
-        values::interval(ruby, now, ttl)?;
-        let token = values::token(ruby, token)?;
-        let result = rb_self.advance(ruby, |election| {
-            election.heartbeat(OwnerId::new(owner.0), token, now.0, ttl.0)
-        })?;
-        Ok(decision(result))
-    }
-    fn resign(
-        ruby: &Ruby,
-        rb_self: Obj<Self>,
-        owner: Id,
-        token: Id,
-        now: Seconds,
-    ) -> Result<Outcome, Error> {
-        rb_self.check_frozen()?;
-        let token: FencingToken = values::token(ruby, token)?;
-        let result = rb_self.advance(ruby, |election| {
-            election.resign(OwnerId::new(owner.0), token, now.0)
-        })?;
-        Ok(decision(result))
-    }
-    fn checkpoint(&self) -> Saved {
-        let (checkpoint, revision) = {
-            let state = self.state.borrow();
-            (state.0.checkpoint(), state.1)
-        };
-        Saved {
-            owner: Arc::clone(&self.owner),
-            revision,
-            checkpoint,
-        }
-    }
-    fn restore(ruby: &Ruby, rb_self: Obj<Self>, saved: &Saved) -> Result<bool, Error> {
-        rb_self.check_frozen()?;
-        if !Arc::ptr_eq(&rb_self.owner, &saved.owner) || rb_self.state.borrow().1 != saved.revision
-        {
-            return Err(Error::new(
-                ruby.exception_arg_error(),
-                "cross-instance or stale checkpoint",
-            ));
-        }
-        let revision = rb_self.next_revision(ruby)?;
-        *rb_self.state.borrow_mut() = (Election::restore(saved.checkpoint), revision);
-        Ok(true)
-    }
-    fn lease(&self) -> Option<(u64, u64, f64)> {
-        self.state.borrow().0.checkpoint().lease().map(|lease| {
-            (
-                lease.owner().value(),
-                lease.token().value(),
-                lease.expires_at().as_secs_f64(),
-            )
-        })
-    }
+
+/// `ElectionMachines.native_checkpoint`: validate, answer nothing.
+fn validate(ruby: &Ruby, saved: Saved) -> Result<(), Error> {
+    checkpoint(ruby, saved).map(drop)
+}
+
+/// `FencingToken#scope`; converting the token is what validates it.
+const fn token_scope(token: Token) -> u16 {
+    token.0.scope()
+}
+
+/// `FencingToken#order`: -1, 0, 1, or `nil` across scopes.
+fn token_order(token: Token, other: Token) -> Option<i8> {
+    token.0.order(other.0).map(|order| match order {
+        Ordering::Less => -1,
+        Ordering::Equal => 0,
+        Ordering::Greater => 1,
+    })
+}
+
+/// `FencingToken#newer_than?`.
+const fn token_newer(token: Token, other: Token) -> bool {
+    token.0.is_newer_than(other.0)
 }

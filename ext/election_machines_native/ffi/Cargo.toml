@@ -13,7 +13,6 @@ doctest = false
 
 [dependencies]
 election-machines.workspace = true
-lease-machines.workspace = true
 magnus.workspace = true
 rb-sys.workspace = true
 

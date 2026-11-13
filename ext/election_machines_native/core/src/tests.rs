@@ -1,52 +1,60 @@
-use super::*;
-fn at(t: u64) -> Duration {
-    Duration::from_secs(t)
+//! Contract tests, and a randomized comparison against a naive model.
+#![allow(clippy::unwrap_used)] // Failed test assumptions should panic.
+mod contract;
+mod model;
+mod random;
+mod restart;
+
+use std::vec::Vec;
+
+use crate::{Duration, Election, FencingToken, Leadership, Lease, LeaseRefusal, OwnerId, Refusal};
+
+/// Every refusal an election call can answer; the randomized run reaches
+/// each of them and nothing else. `Occupied` and `Held` are honoured as an
+/// incumbent, and `Fenced` and `OutOfPhase` are the lease holder's.
+const ANSWERED: [Refusal; 9] = [
+    Refusal::NoCandidates,
+    Refusal::Lease(LeaseRefusal::NoLease),
+    Refusal::Lease(LeaseRefusal::WrongOwner),
+    Refusal::Lease(LeaseRefusal::StaleToken),
+    Refusal::Lease(LeaseRefusal::Unknown),
+    Refusal::Lease(LeaseRefusal::Expired),
+    Refusal::Lease(LeaseRefusal::ClockRegressed),
+    Refusal::Lease(LeaseRefusal::InvalidTtl),
+    Refusal::Lease(LeaseRefusal::Exhausted),
+];
+
+/// Sequence numbers one scope holds: 2^48 - 1.
+const LAST: u64 = (1 << 48) - 1;
+
+fn at(seconds: u64) -> Duration {
+    Duration::from_secs(seconds)
 }
 
-#[test]
-fn nomination_is_deterministic_and_incumbency_is_not_membership() {
-    let mut election = Election::default();
-    let Leadership::Elected(first) =
-        election.elect(&[OwnerId::new(9), OwnerId::new(2)], at(0), at(5))
-    else {
-        panic!("expected election");
-    };
-    assert_eq!(first.owner(), OwnerId::new(2));
-    assert_eq!(
-        election.elect(&[OwnerId::new(1)], at(1), at(5)),
-        Leadership::Incumbent(first)
-    );
-    assert_eq!(election.elect(&[], at(1), at(5)), Leadership::NoCandidates);
-    let Leadership::Elected(next) = election.elect(&[OwnerId::new(1)], at(5), at(5)) else {
-        panic!("expected takeover");
-    };
-    assert!(next.token() > first.token());
+fn owners(ids: &[u64]) -> Vec<OwnerId> {
+    ids.iter().copied().map(OwnerId::new).collect()
 }
 
-#[test]
-fn heartbeat_and_recovery_preserve_authority_contract() {
-    let (lease, checkpoint) = {
-        let mut election = Election::default();
-        let Leadership::Elected(lease) = election.elect(&[OwnerId::new(1)], at(1), at(5)) else {
-            panic!("expected election");
-        };
-        assert_eq!(
-            election.heartbeat(OwnerId::new(2), lease.token(), at(2), at(5)),
-            Decision::Rejected(Rejection::WrongOwner)
-        );
-        (lease, election.checkpoint())
-    };
-    let mut restored = Election::restore(checkpoint);
-    assert_eq!(
-        restored.elect(&[OwnerId::new(2)], at(0), at(5)),
-        Leadership::Rejected(Rejection::ClockRegressed)
-    );
-    assert_eq!(
-        restored.resign(lease.owner(), lease.token(), at(3)),
-        Decision::Released
-    );
-    let Leadership::Elected(next) = restored.elect(&[OwnerId::new(2)], at(3), at(5)) else {
-        panic!("expected election");
-    };
-    assert!(next.token() > lease.token());
+/// The token `scope` issues at `sequence`, whoever asks.
+fn token(scope: u16, sequence: u64) -> FencingToken {
+    FencingToken::from_raw((u64::from(scope) << 48) | sequence).unwrap()
+}
+
+fn elected(election: &mut Election, ids: &[u64], now: u64, ttl: u64) -> Lease {
+    match election.elect(&owners(ids), at(now), at(ttl)) {
+        Ok(Leadership::Elected(lease)) => lease,
+        other => panic!("expected an election, got {other:?}"),
+    }
+}
+
+/// Run `call`, which must be refused with `refusal` and change nothing.
+fn refused<T: core::fmt::Debug + PartialEq>(
+    election: &mut Election,
+    refusal: impl Into<Refusal>,
+    call: impl FnOnce(&mut Election) -> Result<T, Refusal>,
+) {
+    let refusal = refusal.into();
+    let before = election.clone();
+    assert_eq!(call(election), Err(refusal));
+    assert_eq!(*election, before, "{refusal:?} changed the election");
 }
