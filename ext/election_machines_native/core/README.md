@@ -23,8 +23,9 @@ an external serialized durable authority**. Raft elections remain in
   observed clock. `Refusal` has two variants: `NoCandidates`, the election's
   own, and `Lease(LeaseRefusal)`, which carries the embedded
   `LeaseAuthority`'s refusal whole. `LeaseRefusal` is `lease_machines::Refusal`,
-  re-exported; `Refusal: From<LeaseRefusal>`, and `Display` and `Error`
-  delegate to it. The election copies none of the lease core's names, so it
+  re-exported; `Refusal: From<LeaseRefusal>`. `Lease(..)` displays as "the
+  lease authority refused" and its `Error::source` is the carried lease
+  refusal, so an error chain prints each reason once. The election copies none of the lease core's names, so it
   has no variant it cannot answer. The table below lists which lease refusals
   can arrive from each call; `Occupied`, `Held`, `Fenced` and `OutOfPhase`
   arrive from none.
@@ -58,12 +59,15 @@ an external serialized durable authority**. Raft elections remain in
   `ClockPolicy` are `lease-machines` types, re-exported here, and so is its
   `Refusal`, as `LeaseRefusal`.
 
-| Call | Honoured | Refused: own | Refused: `Lease(..)` carrying |
-| --- | --- | --- | --- |
-| `elect(candidates, now, ttl)` | `Leadership::Elected(lease)`, `Leadership::Incumbent(lease)` | `NoCandidates` | `ClockRegressed`, `InvalidTtl`, `Exhausted` |
-| `heartbeat(owner, token, now, ttl)` | `Lease` (same token) | | `Unknown`, `ClockRegressed`, `NoLease`, `WrongOwner`, `StaleToken`, `Expired`, `InvalidTtl` |
-| `resign(owner, token, now)` | `Lease` (the one given up) | | `Unknown`, `ClockRegressed`, `NoLease`, `WrongOwner`, `StaleToken`, `Expired` |
-| `restored(scope, checkpoint, clock)` | `Some(Election)` | `None`: the checkpoint is of another scope | |
+| Call | Honoured | Refused: own | Refused: `Lease(..)` carrying | Records `now` |
+| --- | --- | --- | --- | --- |
+| `elect(candidates, now, ttl)` | `Leadership::Elected(lease)`, `Leadership::Incumbent(lease)` | `NoCandidates` | `ClockRegressed`, `InvalidTtl`, `Exhausted` | `Elected`: yes, the new grant's expiry depends on it. `Incumbent`: no, nothing changes |
+| `heartbeat(owner, token, now, ttl)` | `Lease` (same token) | | `Unknown`, `ClockRegressed`, `NoLease`, `WrongOwner`, `StaleToken`, `Expired`, `InvalidTtl` | yes: honoured only while unexpired at `now`, a replay included |
+| `resign(owner, token, now)` | `Lease` (the one given up) | | `Unknown`, `ClockRegressed`, `NoLease`, `WrongOwner`, `StaleToken`, `Expired` | yes: honoured only while unexpired at `now` |
+| `restored(scope, checkpoint, clock)` | `Some(Election)` | `None`: the checkpoint is of another scope | | |
+
+Under `Clamp` the instant recorded is the one the call was evaluated at, so
+the watermark stays where it was. A refusal records nothing.
 
 ## Example
 
@@ -71,14 +75,14 @@ an external serialized durable authority**. Raft elections remain in
 use core::time::Duration;
 use election_machines::{ClockPolicy, Election, Leadership, LeaseRefusal, OwnerId, Refusal};
 
-fn main() -> Result<(), Refusal> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seconds = Duration::from_secs;
     let mut election = Election::with_scope(7);
 
     let candidates = [OwnerId::new(9), OwnerId::new(2)];
-    let Leadership::Elected(lease) = election.elect(&candidates, seconds(0), seconds(30))? else {
-        unreachable!("nobody led before");
-    };
+    let elected = election.elect(&candidates, seconds(0), seconds(30))?;
+    assert!(!elected.is_incumbent(), "nobody led before");
+    let lease = elected.lease();
     assert_eq!((lease.owner(), lease.token().scope()), (OwnerId::new(2), 7));
 
     // A live leader stays, whoever asks; nothing changes.
@@ -93,7 +97,7 @@ fn main() -> Result<(), Refusal> {
     // Persist the checkpoint, then restore it under the same scope only.
     let saved = election.checkpoint();
     assert!(Election::restored(8, saved.clone(), ClockPolicy::Reject).is_none());
-    let mut restored = Election::restored(7, saved, ClockPolicy::Reject).expect("the same scope");
+    let mut restored = Election::restored(7, saved, ClockPolicy::Reject).ok_or("another scope")?;
     restored.resign(lease.owner(), lease.token(), seconds(12))?;
     let next = restored.elect(&candidates, seconds(12), seconds(30))?.lease();
     assert!(next.token().is_newer_than(lease.token()));

@@ -61,9 +61,9 @@ class CheckpointTest < Minitest::Test
     end
     assert_equal :clamp, E::Election.restored(SCOPE, saved, :clamp).clock_policy
     assert_equal :reject, E::Election.restored(SCOPE, saved, :reject).clock_policy
-    assert_raises(ArgumentError) { E::Election.restored(SCOPE, saved, :ignore) }
+    assert_raises(RangeError) { E::Election.restored(SCOPE, saved, :ignore) }
     assert_raises(TypeError) { E::Election.restored(SCOPE, saved, 'clamp') }
-    assert_raises(ArgumentError) { election.with_clock_policy(:ignore) }
+    assert_raises(RangeError) { election.with_clock_policy(:ignore) }
     assert_raises(ArgumentError) { E::Election.restored(SCOPE, saved) }
   end
 
@@ -87,6 +87,9 @@ class CheckpointTest < Minitest::Test
     assert_equal lease(1, token(SCOPE, 1), at(16)), election.heartbeat(1, held.token, at(11), at(5))
     assert_equal lease(1, token(SCOPE, 1), at(16)), election.resign(1, held.token, at(12))
     assert_equal E::Checkpoint.new(SCOPE, 1, nil, at(12)), election.checkpoint
-    assert_equal held, E::Checkpoint.new(SCOPE, 1, held, 0).lease
+    kept = E::Checkpoint.new(SCOPE, 1, held, 0)
+    assert_instance_of E::Lease, kept.lease
+    assert_instance_of E::FencingToken, kept.lease.token
+    assert_equal E::Election.restored(SCOPE, saved, :reject).checkpoint.lease, kept.lease
   end
 end

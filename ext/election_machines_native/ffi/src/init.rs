@@ -2,11 +2,12 @@
 use magnus::{Error, Ruby, function, method, prelude::*};
 
 use crate::election::Election;
-use crate::names;
+use crate::{classes, names, values};
 
 #[magnus::init]
 fn init(ruby: &Ruby) -> Result<(), Error> {
     let module = ruby.define_module("ElectionMachines")?;
+    classes::resolve(ruby, module)?;
     let symbols = |names: &[&str]| {
         let list = ruby.ary_from_iter(names.iter().map(|name| ruby.to_symbol(*name)));
         list.freeze();
@@ -17,7 +18,11 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     module.define_singleton_method("native_token_scope", function!(crate::token_scope, 1))?;
     module.define_singleton_method("native_token_order", function!(crate::token_order, 2))?;
     module.define_singleton_method("native_token_newer", function!(crate::token_newer, 2))?;
-    module.define_singleton_method("native_checkpoint", function!(crate::validate, 1))?;
+    module.define_singleton_method("native_raw", function!(crate::validate_raw, 1))?;
+    module.define_singleton_method("native_lease", function!(values::validate_lease, 3))?;
+    module.define_singleton_method("native_held", function!(values::validate_held, 1))?;
+    let checkpoint = function!(values::validate_checkpoint, 4);
+    module.define_singleton_method("native_checkpoint", checkpoint)?;
 
     let class = module.define_class("Election", ruby.class_object())?;
     class.undef_default_alloc_func();

@@ -111,6 +111,20 @@ class ElectionTest < Minitest::Test
     assert_equal before, snapshot(election)
   end
 
+  # The classes of an honoured answer are resolved once at load: removing a
+  # constant afterwards changes nothing the binding builds.
+  def test_answer_classes_are_resolved_at_load
+    %i[Elected Lease FencingToken].each do |name|
+      saved = E.send(:remove_const, name)
+      begin
+        elected = E::Election.new.elect([1], 0, at(10))
+        assert_instance_of saved, { Elected: elected, Lease: elected.lease, FencingToken: elected.lease.token }[name]
+      ensure
+        E.const_set(name, saved)
+      end
+    end
+  end
+
   def test_a_frozen_election_refuses_every_mutation_and_still_reads
     election = E::Election.new
     held = election.elect([1], 0, at(10)).lease

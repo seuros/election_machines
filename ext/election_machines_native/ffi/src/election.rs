@@ -4,8 +4,10 @@ use std::cell::RefCell;
 use election_machines::{Leadership, Lease, OwnerId, Refusal};
 use magnus::{Error, IntoValue, RArray, Ruby, Value, prelude::*, typed_data::Obj};
 
+use crate::classes::{classes, keep};
 use crate::names::{self, Policy};
-use crate::{Nanos, Number, Saved, Scope, Token, checkpoint, row};
+use crate::values::{CheckpointValue, TokenValue, lease_object};
+use crate::{Nanos, Number, Scope, row};
 
 type Core = election_machines::Election;
 
@@ -17,9 +19,13 @@ impl Election {
         Self(RefCell::new(Core::with_scope(scope.0)))
     }
 
-    pub fn restored(ruby: &Ruby, scope: Scope, saved: Saved, clock: Policy) -> Result<Self, Error> {
-        let committed = checkpoint(ruby, saved)?;
-        Core::restored(scope.0, committed, clock.0)
+    pub fn restored(
+        ruby: &Ruby,
+        scope: Scope,
+        saved: CheckpointValue,
+        clock: Policy,
+    ) -> Result<Self, Error> {
+        Core::restored(scope.0, saved.0, clock.0)
             .map(|core| Self(RefCell::new(core)))
             .ok_or_else(|| {
                 Error::new(
@@ -67,7 +73,10 @@ impl Election {
         ruby.to_symbol(names::refusal(refusal)).as_value()
     }
 
-    /// `[incumbent, lease row]` when honoured, or the refusal symbol.
+    /// An `Elected` or `Incumbent` when honoured, or the refusal symbol.
+    /// Every candidate is converted before the core is called. The answer is
+    /// built while the decision is held on a copy, kept only once it exists
+    /// (clone-then-keep).
     pub fn elect(
         ruby: &Ruby,
         this: Obj<Self>,
@@ -80,25 +89,30 @@ impl Election {
         for candidate in candidates {
             owners.push(OwnerId::new(Number::try_convert(candidate)?.0));
         }
-        let outcome = this.0.borrow_mut().elect(&owners, now.0, ttl.0);
-        Ok(match outcome {
-            Ok(Leadership::Elected(lease)) => (false, row(ruby, lease)).into_value_with(ruby),
-            Ok(Leadership::Incumbent(lease)) => (true, row(ruby, lease)).into_value_with(ruby),
-            Err(refusal) => Self::refused(ruby, refusal),
+        let classes = classes(ruby)?;
+        let decide = |core: &mut Core| core.elect(&owners, now.0, ttl.0);
+        keep(ruby, this, &this.0, decide, |outcome| {
+            let (class, lease) = match outcome {
+                Ok(Leadership::Elected(lease)) => (classes.elected, lease),
+                Ok(Leadership::Incumbent(lease)) => (classes.incumbent, lease),
+                Err(refusal) => return Ok(Self::refused(ruby, refusal)),
+            };
+            ruby.get_inner(class)
+                .funcall("new", (lease_object(ruby, lease)?,))
         })
     }
 
-    /// The lease row when honoured, or the refusal symbol.
+    /// A `Lease` when honoured, or the refusal symbol. Everything that can
+    /// raise happens before the core is called; the `Lease` is built while
+    /// the decision is held on a copy (clone-then-keep).
     fn decide(
         ruby: &Ruby,
         this: Obj<Self>,
         call: impl FnOnce(&mut Core) -> Result<Lease, Refusal>,
     ) -> Result<Value, Error> {
-        this.check_frozen()?;
-        let decision = call(&mut this.0.borrow_mut());
-        Ok(match decision {
-            Ok(lease) => row(ruby, lease),
-            Err(refusal) => Self::refused(ruby, refusal),
+        keep(ruby, this, &this.0, call, |decision| match decision {
+            Ok(lease) => lease_object(ruby, lease),
+            Err(refusal) => Ok(Self::refused(ruby, refusal)),
         })
     }
 
@@ -106,7 +120,7 @@ impl Election {
         ruby: &Ruby,
         this: Obj<Self>,
         owner: Number,
-        token: Token,
+        token: TokenValue,
         now: Nanos,
         ttl: Nanos,
     ) -> Result<Value, Error> {
@@ -119,7 +133,7 @@ impl Election {
         ruby: &Ruby,
         this: Obj<Self>,
         owner: Number,
-        token: Token,
+        token: TokenValue,
         now: Nanos,
     ) -> Result<Value, Error> {
         Self::decide(ruby, this, |core| {

@@ -56,15 +56,15 @@ impl TryConvert for Policy {
             Error::new(ruby.exception_type_error(), "clock policy must be a Symbol")
         })?;
         let name = symbol.name()?;
-        if name == clock_policy(ClockPolicy::Reject) {
-            Ok(Self(ClockPolicy::Reject))
-        } else if name == clock_policy(ClockPolicy::Clamp) {
-            Ok(Self(ClockPolicy::Clamp))
-        } else {
-            Err(Error::new(
-                ruby.exception_arg_error(),
-                "clock policy must be :reject or :clamp",
-            ))
-        }
+        [ClockPolicy::Reject, ClockPolicy::Clamp]
+            .into_iter()
+            .find(|policy| clock_policy(*policy) == name)
+            .map(Self)
+            .ok_or_else(|| {
+                Error::new(
+                    ruby.exception_range_error(),
+                    "clock policy must be :reject or :clamp",
+                )
+            })
     }
 }

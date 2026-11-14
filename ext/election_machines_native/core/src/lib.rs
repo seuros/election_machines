@@ -155,13 +155,19 @@ impl Election {
         match self.authority.acquire(nominee, now, ttl) {
             Ok(lease) => Ok(Leadership::Elected(lease)),
             // Both name a grant that is unexpired at the instant the request
-            // was evaluated at; a refused acquire recorded nothing. They are
-            // answered only about a grant, so there is always a lease here;
-            // without one the authority's answer would be carried as it came.
-            Err(refusal @ (LeaseRefusal::Occupied | LeaseRefusal::Held)) => self
-                .lease()
-                .map(Leadership::Incumbent)
-                .ok_or(Refusal::Lease(refusal)),
+            // was evaluated at; a refused acquire recorded nothing, so the
+            // incumbent answer records nothing either.
+            Err(refusal @ (LeaseRefusal::Occupied | LeaseRefusal::Held)) => {
+                if let Some(lease) = self.lease() {
+                    return Ok(Leadership::Incumbent(lease));
+                }
+                debug_assert!(
+                    false,
+                    "the authority answers Occupied and Held only about a grant it holds"
+                );
+                // Nothing changed: carry the authority's refusal as it came.
+                Err(Refusal::Lease(refusal))
+            }
             // Listed in full, so a new lease refusal is decided here: is it
             // an incumbent to honour, or a nomination refused?
             Err(

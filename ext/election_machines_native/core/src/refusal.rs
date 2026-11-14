@@ -30,20 +30,21 @@ impl From<LeaseRefusal> for Refusal {
 
 impl fmt::Display for Refusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NoCandidates => f.write_str("the candidate list is empty"),
-            Self::Lease(refusal) => refusal.fmt(f),
-        }
+        f.write_str(match self {
+            Self::NoCandidates => "the candidate list is empty",
+            Self::Lease(_) => "the lease authority refused",
+        })
     }
 }
 
-/// Transparent over [`Refusal::Lease`]: the message is the lease refusal's,
-/// and so is the source, so an error chain never prints one reason twice.
+/// [`Refusal::Lease`] chains to the lease refusal it carries: the message
+/// says the authority refused, the source says why, so an error chain prints
+/// each reason once.
 impl core::error::Error for Refusal {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Self::NoCandidates => None,
-            Self::Lease(refusal) => refusal.source(),
+            Self::Lease(refusal) => Some(refusal),
         }
     }
 }

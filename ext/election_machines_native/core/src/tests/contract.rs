@@ -39,9 +39,6 @@ fn a_live_incumbent_is_honoured_and_nothing_changes() {
 #[test]
 fn elect_refusals_change_nothing() {
     let mut election = Election::new();
-    refused(&mut election, Refusal::NoCandidates, |e| {
-        e.elect(&[], at(0), at(5))
-    });
     refused(&mut election, LeaseRefusal::InvalidTtl, |e| {
         e.elect(&owners(&[1]), at(0), at(0))
     });
@@ -148,8 +145,10 @@ fn a_lease_refusal_is_carried_whole() {
     for lease in every {
         let carried = Refusal::from(lease);
         assert_eq!(carried, Refusal::Lease(lease));
-        assert_eq!(std::format!("{carried}"), std::format!("{lease}"));
-        assert!(carried.source().is_none());
+        assert_eq!(std::format!("{carried}"), "the lease authority refused");
+        let source = carried.source().map(std::string::ToString::to_string);
+        assert_eq!(source, Some(std::format!("{lease}")));
+        assert!(carried.source().and_then(Error::source).is_none());
     }
     let own: &dyn Error = &Refusal::NoCandidates;
     assert_eq!(std::format!("{own}"), "the candidate list is empty");

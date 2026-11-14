@@ -69,18 +69,23 @@ module ElectionMachines
     attr_reader owner: owner
     attr_reader token: FencingToken
     attr_reader expires_at: nanoseconds
-    def self.new: (owner owner, FencingToken token, nanoseconds expires_at) -> Lease
-                | (owner: owner, token: FencingToken, expires_at: nanoseconds) -> Lease
+    # Validated like a granted one: TypeError for a non-Integer owner or
+    # instant or a token without `raw`, RangeError for an owner outside
+    # 0..2**64-1, a token `from_raw` rejects or an instant out of range.
+    # `token` is read by its readers and kept as this gem's FencingToken.
+    def self.new: (owner owner, _FencingToken token, nanoseconds expires_at) -> Lease
+                | (owner: owner, token: _FencingToken, expires_at: nanoseconds) -> Lease
   end
 
   class Checkpoint < Data
     attr_reader scope: scope
     # Tokens issued so far, resignations included; the next is `issued + 1`.
     attr_reader issued: Integer
-    attr_reader lease: _Lease?
+    attr_reader lease: Lease?
     attr_reader observed: nanoseconds
     # RangeError when `issued` is past 2**48-1, or `lease` does not carry
-    # token number `issued` of `scope`.
+    # token number `issued` of `scope`. `lease` is read by its readers and
+    # kept as this gem's Lease.
     def self.new: (scope scope, Integer issued, _Lease? lease, nanoseconds observed) -> Checkpoint
                 | (scope: scope, issued: Integer, lease: _Lease?, observed: nanoseconds) -> Checkpoint
     def self.from_parts: (scope scope, Integer issued, _Lease? lease, nanoseconds observed) -> Checkpoint
@@ -88,15 +93,18 @@ module ElectionMachines
 
   class Elected < Data
     attr_reader lease: Lease
-    def self.new: (Lease lease) -> Elected
-                | (lease: Lease) -> Elected
+    # `lease` is read by its readers, validated like Lease.new and kept as
+    # this gem's Lease: TypeError without the readers, RangeError otherwise.
+    def self.new: (_Lease lease) -> Elected
+                | (lease: _Lease) -> Elected
     def incumbent?: () -> false
   end
 
   class Incumbent < Data
     attr_reader lease: Lease
-    def self.new: (Lease lease) -> Incumbent
-                | (lease: Lease) -> Incumbent
+    # Read, validated and kept like Elected's.
+    def self.new: (_Lease lease) -> Incumbent
+                | (lease: _Lease) -> Incumbent
     def incumbent?: () -> true
   end
 
@@ -110,9 +118,10 @@ module ElectionMachines
     # A fresh token namespace whose tokens carry `scope`.
     def self.with_scope: (scope scope) -> Election
     # RangeError when `checkpoint` is of another scope. TypeError unless
-    # `clock_policy` is a Symbol, ArgumentError unless :reject or :clamp.
+    # `clock_policy` is a Symbol, RangeError unless :reject or :clamp.
     def self.restored: (scope scope, _Checkpoint checkpoint, clock_policy clock_policy) -> Election
-    # Changes this election and answers it.
+    # Changes this election and answers it. TypeError for a non-Symbol,
+    # RangeError unless :reject or :clamp.
     def with_clock_policy: (clock_policy clock_policy) -> self
     def clock_policy: () -> clock_policy
     def scope: () -> scope
@@ -137,28 +146,23 @@ module ElectionMachines
     type row = [Integer, Integer, Integer]
     type saved = [Integer, Integer, row?, Integer]
     def self.native_with_scope: (Integer) -> Election
-    def self.native_restored: (Integer, saved, Symbol) -> Election
+    def self.native_restored: (Integer, _Checkpoint, Symbol) -> Election
     def native_with_clock_policy: (Symbol) -> nil
     def native_lease: () -> row?
     def native_checkpoint: () -> saved
-    def native_elect: (Array[Integer], Integer, Integer) -> ([bool, row] | refusal)
-    def native_heartbeat: (Integer, Integer, Integer, Integer) -> (row | refusal)
-    def native_resign: (Integer, Integer, Integer) -> (row | refusal)
-    def decided: (row | refusal) -> (Lease | refusal)
+    def native_elect: (Array[Integer], Integer, Integer) -> (Elected | Incumbent | refusal)
+    def native_heartbeat: (Integer, _FencingToken, Integer, Integer) -> (Lease | refusal)
+    def native_resign: (Integer, _FencingToken, Integer) -> (Lease | refusal)
   end
 
   private
 
-  def self.native_token_scope: (Integer) -> Integer
-  def self.native_token_order: (Integer, Integer) -> (-1 | 0 | 1)?
-  def self.native_token_newer: (Integer, Integer) -> bool
-  def self.native_checkpoint: ([Integer, Integer, [Integer, Integer, Integer]?, Integer]) -> nil
-
-  module Rows
-    def self?.read: (untyped value, Symbol reader, String what) -> untyped
-    def self?.raw: (_FencingToken) -> Integer
-    def self?.lease: (_Lease) -> [Integer, Integer, Integer]
-    def self?.to_lease: ([Integer, Integer, Integer]) -> Lease
-    def self?.checkpoint: (_Checkpoint) -> [Integer, Integer, [Integer, Integer, Integer]?, Integer]
-  end
+  def self.native_raw: (Integer) -> nil
+  def self.native_token_scope: (_FencingToken) -> Integer
+  def self.native_token_order: (_FencingToken, _FencingToken) -> (-1 | 0 | 1)?
+  def self.native_token_newer: (_FencingToken, _FencingToken) -> bool
+  def self.native_lease: (owner, _FencingToken, nanoseconds) -> FencingToken
+  def self.native_held: (_Lease) -> Lease
+  def self.native_checkpoint: (scope, Integer, _Lease?, nanoseconds) -> Lease?
+  def self.lease_of: ([Integer, Integer, Integer]) -> Lease
 end

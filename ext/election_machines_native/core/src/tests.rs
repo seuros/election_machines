@@ -7,7 +7,7 @@ mod restart;
 
 use std::vec::Vec;
 
-use crate::{Duration, Election, FencingToken, Leadership, Lease, LeaseRefusal, OwnerId, Refusal};
+use crate::{Duration, Election, FencingToken, Lease, LeaseRefusal, OwnerId, Refusal};
 
 /// Every refusal an election call can answer; the randomized run reaches
 /// each of them and nothing else. `Occupied` and `Held` are honoured as an
@@ -41,10 +41,12 @@ fn token(scope: u16, sequence: u64) -> FencingToken {
 }
 
 fn elected(election: &mut Election, ids: &[u64], now: u64, ttl: u64) -> Lease {
-    match election.elect(&owners(ids), at(now), at(ttl)) {
-        Ok(Leadership::Elected(lease)) => lease,
-        other => panic!("expected an election, got {other:?}"),
-    }
+    let leadership = election.elect(&owners(ids), at(now), at(ttl)).unwrap();
+    assert!(
+        !leadership.is_incumbent(),
+        "expected an election, got {leadership:?}"
+    );
+    leadership.lease()
 }
 
 /// Run `call`, which must be refused with `refusal` and change nothing.

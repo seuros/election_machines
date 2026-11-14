@@ -199,7 +199,7 @@ reports.heartbeat(4, token, 1 * s, 10 * s)   # => :unknown, not a token of this 
 
 Tokens of one scope are ordered, tokens of two scopes are not, so there is no `<`. Compare with `token.order(other)` (`-1`, `0`, `1`, or `nil` across scopes) and `token.newer_than?(other)`.
 
-`FencingToken`, `Lease` and `Checkpoint` are the lease core's types, which the election core re-exports. Wherever a method takes one it reads it by its readers (`raw`; `owner`, `token`, `expires_at`; `scope`, `issued`, `lease`, `observed`), so the `lease_machines` gem's values of the same names fit as they are. This gem does not depend on that one. A bare Integer is not a token: it raises `TypeError`.
+`FencingToken`, `Lease` and `Checkpoint` are the lease core's types, which the election core re-exports. Wherever a method takes one it reads it by its readers (`raw`; `owner`, `token`, `expires_at`; `scope`, `issued`, `lease`, `observed`), so the `lease_machines` gem's values of the same names fit as they are. This gem does not depend on that one. A bare Integer is not a token: it raises `TypeError`. What it keeps is always its own: a `Lease` built with the lease gem's token, a `Checkpoint`, `Elected` or `Incumbent` built with the lease gem's lease, holds this gem's `FencingToken` and `Lease`, so it is `==` to what the election answers.
 
 ## Checkpoints
 
@@ -223,17 +223,19 @@ One thing no value can check: restoring an older checkpoint than the newest one 
 
 ## Every answer
 
-| Method | Honoured | Refused (changes nothing) |
-| --- | --- | --- |
-| `elect(candidates, now, ttl)` | `Elected(lease)` (new leader, new token), `Incumbent(lease)` (live leader stays, nothing changed) | `:no_candidates`, `:clock_regressed`, `:invalid_ttl`, `:exhausted` |
-| `heartbeat(owner, token, now, ttl)` | `Lease` under the same token; a repeat is honoured | `:unknown`, `:clock_regressed`, `:no_lease`, `:wrong_owner`, `:stale_token`, `:expired`, `:invalid_ttl` |
-| `resign(owner, token, now)` | `Lease`, the one given up | `:unknown`, `:clock_regressed`, `:no_lease` (a repeat included), `:wrong_owner`, `:stale_token`, `:expired` |
-| `lease` | `Lease` or `nil` | |
-| `checkpoint` | `Checkpoint` | |
-| `scope`, `issued`, `clock_policy` | Integer, Integer, `:reject` or `:clamp` | |
-| `with_clock_policy(clock_policy)` | the election itself | |
-| `Election.new`, `Election.with_scope(scope)` | `Election` | |
-| `Election.restored(scope, checkpoint, clock_policy)` | `Election` | raises `RangeError` for a checkpoint of another scope |
+| Method | Honoured | Refused (changes nothing) | Records the clock |
+| --- | --- | --- | --- |
+| `elect(candidates, now, ttl)` | `Elected(lease)` (new leader, new token), `Incumbent(lease)` (live leader stays, nothing changed) | `:no_candidates`, `:clock_regressed`, `:invalid_ttl`, `:exhausted` | `Elected`: yes, the new lease's expiry depends on `now`. `Incumbent`: no, nothing changes |
+| `heartbeat(owner, token, now, ttl)` | `Lease` under the same token; a repeat is honoured | `:unknown`, `:clock_regressed`, `:no_lease`, `:wrong_owner`, `:stale_token`, `:expired`, `:invalid_ttl` | yes: honoured only while unexpired at `now`, a repeat included |
+| `resign(owner, token, now)` | `Lease`, the one given up | `:unknown`, `:clock_regressed`, `:no_lease` (a repeat included), `:wrong_owner`, `:stale_token`, `:expired` | yes: honoured only while unexpired at `now` |
+| `lease` | `Lease` or `nil` | | |
+| `checkpoint` | `Checkpoint` | | |
+| `scope`, `issued`, `clock_policy` | Integer, Integer, `:reject` or `:clamp` | | |
+| `with_clock_policy(clock_policy)` | the election itself | | |
+| `Election.new`, `Election.with_scope(scope)` | `Election` | | |
+| `Election.restored(scope, checkpoint, clock_policy)` | `Election` | raises `RangeError` for a checkpoint of another scope | |
+
+Under `:clamp` the instant recorded is the one the call was evaluated at, so the observed clock stays where it was.
 
 `ElectionMachines::REFUSALS` lists exactly the nine symbols above, the ones an election can answer. `:no_candidates` is the election's own. The other eight are the lease core's refusals, which the election core carries whole (`Refusal::Lease(..)`) and answers under the lease core's own symbol, so `:wrong_owner` here is the `lease_machines` gem's `:wrong_owner`. The lease core's `:occupied` and `:held` never come back: a live leader is the honoured `Incumbent`. Its `:fenced` and `:out_of_phase` belong to the lease holder, which an election has none of.
 
@@ -241,7 +243,10 @@ One thing no value can check: restoring an older checkpoint than the newest one 
 
 - **Owners are Integers** in `0..2**64-1`, in a list of any length. Floats, strings and nil raise `TypeError`, out of range raises `RangeError`.
 - **Times are Integer nanoseconds**, from a monotonic origin you choose, for instants (`now`, `expires_at`, `observed`) and spans (`ttl`) alike. A Float raises `TypeError`, a negative or unrepresentable value raises `RangeError`. A zero `ttl`, or one that overflows, is the refusal `:invalid_ttl`.
-- **Refusals don't raise.** Every one is a Symbol: `:no_candidates` for the core's `Refusal::NoCandidates`, and for `Refusal::Lease(reason)` the lease core's symbol for `reason`. There is no catch-all. Only malformed input raises.
+- **Refusals don't raise.** Every one is a Symbol: `:no_candidates` for the core's `Refusal::NoCandidates`, and for `Refusal::Lease(reason)` the lease core's symbol for `reason`. There is no catch-all. Only malformed input raises: `TypeError` for the wrong type, `RangeError` for a value the core does not accept (a clock policy other than `:reject` or `:clamp` included). Nothing raises `ArgumentError` except Ruby itself, for the wrong number of arguments.
+- **Values are valid or do not exist.** `FencingToken.new`, `Lease.new`, `Checkpoint.new`, `Elected.new` and `Incumbent.new` are checked by the core whoever calls them: `Lease.new('x', token, 0)` raises `TypeError`, `Lease.new(1, token, -1)` raises `RangeError`.
+- **The binding never loses work.** Every argument is read and checked before the election is asked anything. Building the answer runs Ruby (`Elected.new`, `Incumbent.new`, `Lease.new`, `FencingToken.new`), so the election decides on a copy, the answer is built, and the copy is kept only if the election is still unfrozen (`FrozenError` otherwise) and unchanged (`RuntimeError` otherwise: something re-entered it while the answer was built). A call that raised changed nothing.
+- **The binding is the authority on values.** `FencingToken`, `Lease`, `Checkpoint`, `Elected` and `Incumbent` are sealed (no `allocate`, no subclass), but Ruby binds a subclass constant before `inherited` raises, `Data#initialize` can be bound directly and `Marshal.load` skips `initialize`. So the native side reads one of this gem's values only when it is exactly that class (a subclass raises `TypeError`, whatever it holds) and checks every field again as the core's constructor does: a forged value raises `TypeError` or `RangeError` and never reaches the election.
 - **A refusal changes nothing.** Not the lease, not the token count, not the observed clock, not the checkpoint you saved a moment ago.
 - **Honoured repeats.** `Incumbent` and a repeated `heartbeat` are honoured. A repeated `resign` is `:no_lease`, because the election cannot prove who resigned.
 - **Scopes are yours.** `with_scope(scope)` takes an Integer in `0..65_535`; a token of another scope is `:unknown` before anything is looked up.
