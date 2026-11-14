@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.0](https://github.com/seuros/election_machines/compare/election_machines/v0.3.0...election_machines/v0.4.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* adopt matryona-machines 0.2: shared instant, exact field reads, compiler-checked symbol tables
+
+### Features
+
+* adopt matryona-machines 0.2: shared instant, exact field reads, compiler-checked symbol tables ([b7cbfd2](https://github.com/seuros/election_machines/commit/b7cbfd2adb6edd2a7c5dce7e57c501d7f29a8c2b))
+
 ## [0.3.0](https://github.com/seuros/election_machines/compare/election_machines/v0.2.0...election_machines/v0.3.0) (2026-11-14)
 
 
