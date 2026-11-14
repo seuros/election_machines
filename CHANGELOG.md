@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.0](https://github.com/seuros/election_machines/compare/election_machines/v0.2.0...election_machines/v0.3.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* validate every value through the core, seal values, exact-class reads, clone-then-keep elect/heartbeat/resign
+
+### Features
+
+* validate every value through the core, seal values, exact-class reads, clone-then-keep elect/heartbeat/resign ([43bbf42](https://github.com/seuros/election_machines/commit/43bbf42813a6cc4ca663764c6ee1186eeff626ec))
+
 ## [0.2.0](https://github.com/seuros/election_machines/compare/election_machines/v0.1.5...election_machines/v0.2.0) (2026-11-13)
 
 
