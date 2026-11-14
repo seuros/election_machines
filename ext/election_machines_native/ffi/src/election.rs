@@ -3,7 +3,9 @@ use std::cell::RefCell;
 
 use election_machines::{Leadership, Lease, OwnerId, Refusal};
 use magnus::{Error, IntoValue, Ruby, Value, prelude::*, typed_data::Obj};
-use matryona_machines::ruby::{Symbols, exact_array, instant, integer, keep, nanoseconds};
+use matryona_machines::ruby::{
+    SymbolNames, Symbols, exact_array, instant, integer, keep, nanoseconds,
+};
 
 use crate::classes::classes;
 use crate::values::{self, lease_object};
@@ -73,7 +75,7 @@ impl Election {
     }
 
     fn refused(ruby: &Ruby, refusal: Refusal) -> Value {
-        names::refusal(ruby, refusal).as_value()
+        names::Refusals::symbol(ruby, &refusal).as_value()
     }
 
     /// An `Elected` or `Incumbent` when honoured, or the refusal symbol.

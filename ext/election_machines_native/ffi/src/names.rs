@@ -1,8 +1,6 @@
 //! Symbol names for the core's enums. Every match is exhaustive: a new
 //! variant fails to compile here until it has a name.
 use election_machines::{ClockPolicy, LeaseRefusal, Refusal};
-use magnus::{Ruby, Symbol};
-use matryona_machines::ruby::{Symbols, symbol};
 
 /// Exactly the refusals an election call can answer: its own, and the lease
 /// refusals `elect`, `heartbeat` and `resign` can carry.
@@ -45,10 +43,12 @@ matryona_machines::symbols! {
     }
 }
 
-/// A refusal's Symbol: a carried lease refusal answers the lease core's own.
-pub fn refusal(ruby: &Ruby, refusal: Refusal) -> Symbol {
-    match refusal {
-        Refusal::NoCandidates => symbol(ruby, "no_candidates"),
-        Refusal::Lease(carried) => LeaseRefusals::symbol(ruby, carried),
+matryona_machines::symbols! {
+    /// The election's refusals as Symbols: a carried lease refusal answers
+    /// under the lease core's own name. Its `NAMES` lists every lease name;
+    /// `REFUSALS` keeps the ones an election call can answer.
+    pub Refusals for Refusal as "a refusal" => names_only {
+        NoCandidates => "no_candidates",
+        Lease(inner) => use LeaseRefusals,
     }
 }

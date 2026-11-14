@@ -78,6 +78,30 @@ class CheckpointTest < Minitest::Test
     assert_raises(TypeError) { E::Election.restored(SCOPE, [SCOPE, 0, nil, 0], :reject) }
   end
 
+  def test_a_value_without_the_readers_is_refused_naming_them
+    error = assert_raises(TypeError) { E::Lease.new(1, 5, 0) }
+    assert_equal 'expected an ElectionMachines::FencingToken or a value with #raw', error.message
+    error = assert_raises(TypeError) { E::Checkpoint.new(SCOPE, 3, [1, 3, 5], 0) }
+    assert_equal 'expected an ElectionMachines::Lease or a value with #owner, #token, #expires_at', error.message
+    error = assert_raises(TypeError) { E::Election.restored(SCOPE, [SCOPE, 0, nil, 0], :reject) }
+    assert_equal 'expected an ElectionMachines::Checkpoint or a value with #scope, #issued, #lease, #observed',
+                 error.message
+  end
+
+  # Every reader is asked for before any runs: a value missing one runs none.
+  # A private reader is no reader.
+  def test_a_value_missing_one_reader_runs_none
+    calls = []
+    partial = Object.new
+    partial.define_singleton_method(:owner) { calls << :owner && 1 }
+    partial.define_singleton_method(:token) { calls << :token && token(SCOPE, 1) }
+    assert_raises(TypeError) { E::Checkpoint.new(SCOPE, 1, partial, 0) }
+    partial.define_singleton_method(:expires_at) { calls << :expires_at && 0 }
+    partial.singleton_class.send(:private, :expires_at)
+    assert_raises(TypeError) { E::Checkpoint.new(SCOPE, 1, partial, 0) }
+    assert_empty calls
+  end
+
   def test_the_lease_gems_values_fit_by_their_readers
     held = SiblingLease.new(1, SiblingToken.new((SCOPE << 48) | 1), at(15))
     saved = SiblingCheckpoint.new(SCOPE, 1, held, at(10))

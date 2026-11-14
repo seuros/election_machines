@@ -1,27 +1,44 @@
 //! Values read from Ruby and built for it.
 //!
 //! Every token, lease and checkpoint the binding reads goes through
-//! [`fields`]: this gem's own class read from the struct, a sibling gem's
-//! value of the same shape read by its readers, a subclass refused. Each
+//! [`own_or_sibling`]: this gem's own class read from the struct, a sibling
+//! gem's value of the same shape read by its public readers, a subclass
+//! refused. Each
 //! field is then converted and the value rebuilt through the core
 //! constructor, so a forged value raises before it reaches the core.
 use election_machines::{Checkpoint, FencingToken, Lease, OwnerId};
 use magnus::{Error, Ruby, Value, prelude::*};
-use matryona_machines::ruby::{instant, integer, nanoseconds};
+use matryona_machines::ruby::{Class, instant, integer, nanoseconds, own_or_sibling_with};
 
-use crate::classes::{classes, fields};
+use crate::classes::classes;
 use crate::{checkpoint as from_parts, raw_token};
+
+/// The fields of exactly this gem's `class`, or of a sibling gem's value
+/// through its public readers; `TypeError` naming both for anything else, a
+/// subclass of `class` included. Runs Ruby on the sibling path, so it is
+/// called while converting arguments, before any core call.
+fn own_or_sibling<const N: usize>(
+    ruby: &Ruby,
+    value: Value,
+    class: Class,
+    readers: [&str; N],
+) -> Result<[Value; N], Error> {
+    let own = class.get(ruby);
+    own_or_sibling_with(ruby, value, own, readers, || {
+        format!("expected an {own} or a value with #{}", readers.join(", #"))
+    })
+}
 
 /// A token as the core's: this gem's `FencingToken` or a sibling's.
 pub fn token(ruby: &Ruby, value: Value) -> Result<FencingToken, Error> {
-    let [raw] = fields(ruby, value, classes(ruby)?.token, ["raw"])?;
+    let [raw] = own_or_sibling(ruby, value, classes(ruby)?.token, ["raw"])?;
     raw_token(raw)
 }
 
 /// A lease as the core's: this gem's `Lease` or a sibling's.
 pub fn lease(ruby: &Ruby, value: Value) -> Result<Lease, Error> {
     let readers = ["owner", "token", "expires_at"];
-    let [owner, held, expires_at] = fields(ruby, value, classes(ruby)?.lease, readers)?;
+    let [owner, held, expires_at] = own_or_sibling(ruby, value, classes(ruby)?.lease, readers)?;
     let owner = OwnerId::new(integer(owner, "owner")?);
     let held = token(ruby, held)?;
     Ok(Lease::new(owner, held, instant(expires_at, "expires_at")?))
@@ -30,7 +47,8 @@ pub fn lease(ruby: &Ruby, value: Value) -> Result<Lease, Error> {
 /// A checkpoint as the core's: this gem's `Checkpoint` or a sibling's.
 pub fn checkpoint(ruby: &Ruby, value: Value) -> Result<Checkpoint, Error> {
     let readers = ["scope", "issued", "lease", "observed"];
-    let [scope, issued, held, observed] = fields(ruby, value, classes(ruby)?.checkpoint, readers)?;
+    let [scope, issued, held, observed] =
+        own_or_sibling(ruby, value, classes(ruby)?.checkpoint, readers)?;
     let (scope, issued) = (integer(scope, "scope")?, integer(issued, "issued")?);
     let held = if held.is_nil() {
         None

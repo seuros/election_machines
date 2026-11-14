@@ -55,6 +55,12 @@ class ForgedTest < Minitest::Test
     end
   end
 
+  def test_a_subclass_instance_is_refused_like_any_other_value
+    forged = leaked_token.new(raw: token(SCOPE, 1).raw)
+    error = assert_raises(TypeError) { E::Lease.new(1, forged, 0) }
+    assert_equal 'expected an ElectionMachines::FencingToken or a value with #raw', error.message
+  end
+
   def test_a_marshalled_value_is_validated_again
     election = E::Election.new
     election.elect([1], 0, at(5))
