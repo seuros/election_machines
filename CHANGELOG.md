@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/seuros/election_machines/compare/election_machines/v0.4.0...election_machines/v0.4.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* **deps:** require matryona-machines &gt;= 0.3 and build exact-field messages lazily ([2af60e9](https://github.com/seuros/election_machines/commit/2af60e9b11cd79bf3a387edce8e26a442d94b10e))
+
 ## [0.4.0](https://github.com/seuros/election_machines/compare/election_machines/v0.3.0...election_machines/v0.4.0) (2026-11-14)
 
 
