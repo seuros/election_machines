@@ -1,5 +1,6 @@
 //! Private native entry point.
 use magnus::{Error, Ruby, function, method, prelude::*};
+use matryona_machines::ruby::{Symbols, symbol};
 
 use crate::election::Election;
 use crate::{classes, names, values};
@@ -9,12 +10,15 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     let module = ruby.define_module("ElectionMachines")?;
     classes::resolve(ruby, module)?;
     let symbols = |names: &[&str]| {
-        let list = ruby.ary_from_iter(names.iter().map(|name| ruby.to_symbol(*name)));
+        let list = ruby.ary_from_iter(names.iter().map(|name| symbol(ruby, name)));
         list.freeze();
         list
     };
     module.const_set("REFUSALS", symbols(&names::REFUSALS))?;
-    module.const_set("CLOCK_POLICIES", symbols(&names::CLOCK_POLICIES))?;
+    let clocks = names::ClockPolicies::ALL.iter();
+    let clocks = ruby.ary_from_iter(clocks.map(|v| names::ClockPolicies::symbol(ruby, *v)));
+    clocks.freeze();
+    module.const_set("CLOCK_POLICIES", clocks)?;
     module.define_singleton_method("native_token_scope", function!(crate::token_scope, 1))?;
     module.define_singleton_method("native_token_order", function!(crate::token_order, 2))?;
     module.define_singleton_method("native_token_newer", function!(crate::token_newer, 2))?;

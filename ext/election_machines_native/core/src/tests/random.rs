@@ -1,24 +1,11 @@
 //! Random calls against the election and the naive model, side by side.
 use std::vec::Vec;
 
+use matryona_machines::testing::XorShift64;
+
 use super::model::{Grant, Model};
 use super::{ANSWERED, LAST, at, token};
 use crate::{Checkpoint, ClockPolicy, Duration, Election, Leadership, Lease, OwnerId, Refusal};
-
-struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        self.0
-    }
-
-    fn below(&mut self, bound: u64) -> u64 {
-        self.next() % bound
-    }
-}
 
 fn grant(lease: Lease) -> Grant {
     let sequence = lease.token().raw() & LAST;
@@ -40,7 +27,7 @@ fn view(election: &Election) -> Model {
 struct Run {
     election: Election,
     model: Model,
-    rng: Rng,
+    rng: XorShift64,
     clock: u64,
     refusals: Vec<Refusal>,
     incumbents: usize,
@@ -60,7 +47,7 @@ impl Run {
         Self {
             election,
             model,
-            rng: Rng(seed),
+            rng: XorShift64::new(seed),
             clock: 0,
             refusals: Vec::new(),
             incumbents: 0,

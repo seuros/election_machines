@@ -79,4 +79,25 @@ class ForgedTest < Minitest::Test
     lease = election.elect([1], 0, at(5)).lease.tap(&:singleton_class)
     assert_equal lease, E::Elected.new(lease).lease
   end
+
+  # This gem's values are read from the struct, never through their readers:
+  # a redefined reader is ignored (a sibling's value is still read by its).
+  def test_a_redefined_reader_is_ignored
+    election = E::Election.with_scope(SCOPE)
+    held = election.elect([1], 0, at(5)).lease
+    saved = E::Checkpoint.new(SCOPE, 1, held, 0)
+    fencing = held.token
+    readers = { E::FencingToken => %i[raw], E::Lease => %i[owner token expires_at],
+                E::Checkpoint => %i[scope issued lease observed] }
+    originals = readers.flat_map { |klass, names| names.map { [klass, it, klass.instance_method(it)] } }
+    begin
+      originals.each { |klass, name, _| klass.define_method(name) { raise "#{name} reader ran" } }
+      renewed = election.heartbeat(1, fencing, at(1), at(5))
+      restored = E::Election.restored(SCOPE, saved, :reject)
+    ensure
+      originals.each { |klass, name, reader| klass.define_method(name, reader) }
+    end
+    assert_equal at(6), renewed.expires_at
+    assert_equal saved, restored.checkpoint
+  end
 end

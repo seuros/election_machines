@@ -136,4 +136,24 @@ class ElectionTest < Minitest::Test
     assert_equal held, election.lease
     assert_equal [0, 1, :reject], [election.scope, election.issued, election.clock_policy]
   end
+
+  # Frozen is checked before any argument is read: a frozen election handed a
+  # malformed argument raises FrozenError, as Ruby's own core methods do.
+  def test_frozen_is_checked_before_the_arguments
+    election = E::Election.new.freeze
+    assert_raises(FrozenError) { election.elect(nil, 0, at(10)) }
+    assert_raises(FrozenError) { election.elect([1.5], 0, at(10)) }
+    assert_raises(FrozenError) { election.heartbeat(1, :token, 0, at(10)) }
+    assert_raises(FrozenError) { election.resign(-1, nil, 0) }
+    assert_raises(FrozenError) { election.with_clock_policy(:sometimes) }
+  end
+
+  # Candidates are read natively from exactly an Array: a subclass, whose
+  # iteration it could redefine, is a TypeError.
+  def test_candidates_must_be_exactly_an_array
+    election = E::Election.new
+    assert_raises(TypeError) { election.elect(Class.new(Array).new([1]), 0, at(10)) }
+    assert_equal 0, election.issued
+    assert_instance_of E::Elected, election.elect([1], 0, at(10))
+  end
 end

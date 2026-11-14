@@ -2,12 +2,16 @@
 use std::cell::RefCell;
 
 use election_machines::{Leadership, Lease, OwnerId, Refusal};
-use magnus::{Error, IntoValue, RArray, Ruby, Value, prelude::*, typed_data::Obj};
+use magnus::{Error, IntoValue, Ruby, Value, prelude::*, typed_data::Obj};
+use matryona_machines::ruby::{Symbols, exact_array, instant, integer, keep, nanoseconds};
 
-use crate::classes::{classes, keep};
-use crate::names::{self, Policy};
-use crate::values::{CheckpointValue, TokenValue, lease_object};
-use crate::{Nanos, Number, Scope, row};
+use crate::classes::classes;
+use crate::values::{self, lease_object};
+use crate::{names, row};
+
+fn owner(value: Value) -> Result<OwnerId, Error> {
+    integer(value, "owner").map(OwnerId::new)
+}
 
 type Core = election_machines::Election;
 
@@ -15,17 +19,15 @@ type Core = election_machines::Election;
 pub struct Election(RefCell<Core>);
 
 impl Election {
-    pub const fn with_scope(scope: Scope) -> Self {
-        Self(RefCell::new(Core::with_scope(scope.0)))
+    pub fn with_scope(scope: Value) -> Result<Self, Error> {
+        Ok(Self(RefCell::new(Core::with_scope(integer(
+            scope, "scope",
+        )?))))
     }
 
-    pub fn restored(
-        ruby: &Ruby,
-        scope: Scope,
-        saved: CheckpointValue,
-        clock: Policy,
-    ) -> Result<Self, Error> {
-        Core::restored(scope.0, saved.0, clock.0)
+    pub fn restored(ruby: &Ruby, scope: Value, saved: Value, clock: Value) -> Result<Self, Error> {
+        let (scope, saved) = (integer(scope, "scope")?, values::checkpoint(ruby, saved)?);
+        Core::restored(scope, saved, names::ClockPolicies::parse(ruby, clock)?)
             .map(|core| Self(RefCell::new(core)))
             .ok_or_else(|| {
                 Error::new(
@@ -35,15 +37,16 @@ impl Election {
             })
     }
 
-    pub fn with_clock_policy(this: Obj<Self>, clock: Policy) -> Result<(), Error> {
+    pub fn with_clock_policy(ruby: &Ruby, this: Obj<Self>, clock: Value) -> Result<(), Error> {
         this.check_frozen()?;
+        let clock = names::ClockPolicies::parse(ruby, clock)?;
         let mut core = this.0.borrow_mut();
-        *core = core.clone().with_clock_policy(clock.0);
+        *core = core.clone().with_clock_policy(clock);
         Ok(())
     }
 
     pub fn clock_policy(ruby: &Ruby, this: &Self) -> magnus::Symbol {
-        ruby.to_symbol(names::clock_policy(this.0.borrow().clock_policy()))
+        names::ClockPolicies::symbol(ruby, this.0.borrow().clock_policy())
     }
 
     pub fn scope(&self) -> u16 {
@@ -64,13 +67,13 @@ impl Election {
             saved.scope(),
             saved.issued(),
             saved.lease().map(|held| row(ruby, held)),
-            saved.observed().as_nanos(),
+            nanoseconds(ruby, saved.observed()),
         )
             .into_value_with(ruby)
     }
 
     fn refused(ruby: &Ruby, refusal: Refusal) -> Value {
-        ruby.to_symbol(names::refusal(refusal)).as_value()
+        names::refusal(ruby, refusal).as_value()
     }
 
     /// An `Elected` or `Incumbent` when honoured, or the refusal symbol.
@@ -80,24 +83,28 @@ impl Election {
     pub fn elect(
         ruby: &Ruby,
         this: Obj<Self>,
-        candidates: RArray,
-        now: Nanos,
-        ttl: Nanos,
+        candidates: Value,
+        now: Value,
+        ttl: Value,
     ) -> Result<Value, Error> {
         this.check_frozen()?;
+        let message = "candidates must be an Array of Integers";
+        let candidates = exact_array(ruby, candidates, message)?;
         let mut owners = Vec::with_capacity(candidates.len());
         for candidate in candidates {
-            owners.push(OwnerId::new(Number::try_convert(candidate)?.0));
+            owners.push(OwnerId::new(integer(candidate, "candidate")?));
         }
+        let (now, ttl) = (instant(now, "now")?, instant(ttl, "ttl")?);
         let classes = classes(ruby)?;
-        let decide = |core: &mut Core| core.elect(&owners, now.0, ttl.0);
+        let decide = |core: &mut Core| core.elect(&owners, now, ttl);
         keep(ruby, this, &this.0, decide, |outcome| {
             let (class, lease) = match outcome {
                 Ok(Leadership::Elected(lease)) => (classes.elected, lease),
                 Ok(Leadership::Incumbent(lease)) => (classes.incumbent, lease),
                 Err(refusal) => return Ok(Self::refused(ruby, refusal)),
             };
-            ruby.get_inner(class)
+            class
+                .get(ruby)
                 .funcall("new", (lease_object(ruby, lease)?,))
         })
     }
@@ -119,25 +126,27 @@ impl Election {
     pub fn heartbeat(
         ruby: &Ruby,
         this: Obj<Self>,
-        owner: Number,
-        token: TokenValue,
-        now: Nanos,
-        ttl: Nanos,
+        owner: Value,
+        token: Value,
+        now: Value,
+        ttl: Value,
     ) -> Result<Value, Error> {
-        Self::decide(ruby, this, |core| {
-            core.heartbeat(OwnerId::new(owner.0), token.0, now.0, ttl.0)
-        })
+        this.check_frozen()?;
+        let (owner, token) = (self::owner(owner)?, values::token(ruby, token)?);
+        let (now, ttl) = (instant(now, "now")?, instant(ttl, "ttl")?);
+        Self::decide(ruby, this, |core| core.heartbeat(owner, token, now, ttl))
     }
 
     pub fn resign(
         ruby: &Ruby,
         this: Obj<Self>,
-        owner: Number,
-        token: TokenValue,
-        now: Nanos,
+        owner: Value,
+        token: Value,
+        now: Value,
     ) -> Result<Value, Error> {
-        Self::decide(ruby, this, |core| {
-            core.resign(OwnerId::new(owner.0), token.0, now.0)
-        })
+        this.check_frozen()?;
+        let (owner, token) = (self::owner(owner)?, values::token(ruby, token)?);
+        let now = instant(now, "now")?;
+        Self::decide(ruby, this, |core| core.resign(owner, token, now))
     }
 }

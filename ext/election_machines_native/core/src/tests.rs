@@ -7,6 +7,8 @@ mod restart;
 
 use std::vec::Vec;
 
+use matryona_machines::testing::{refuses, unchanged};
+
 use crate::{Duration, Election, FencingToken, Lease, LeaseRefusal, OwnerId, Refusal};
 
 /// Every refusal an election call can answer; the randomized run reaches
@@ -47,16 +49,4 @@ fn elected(election: &mut Election, ids: &[u64], now: u64, ttl: u64) -> Lease {
         "expected an election, got {leadership:?}"
     );
     leadership.lease()
-}
-
-/// Run `call`, which must be refused with `refusal` and change nothing.
-fn refused<T: core::fmt::Debug + PartialEq>(
-    election: &mut Election,
-    refusal: impl Into<Refusal>,
-    call: impl FnOnce(&mut Election) -> Result<T, Refusal>,
-) {
-    let refusal = refusal.into();
-    let before = election.clone();
-    assert_eq!(call(election), Err(refusal));
-    assert_eq!(*election, before, "{refusal:?} changed the election");
 }
