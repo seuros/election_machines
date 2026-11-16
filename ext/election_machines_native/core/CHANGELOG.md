@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/seuros/election_machines/compare/election-machines-v0.5.0...election-machines-v0.5.1) (2026-11-16)
+
+
+### Bug Fixes
+
+* elect queries the live incumbent before acquiring ([c27843a](https://github.com/seuros/election_machines/commit/c27843a2259b44bd6f642ad6c717bd84bcbff813))
+
 ## [0.5.0](https://github.com/seuros/election_machines/compare/election-machines-v0.4.0...election-machines-v0.5.0) (2026-11-14)
 
 
