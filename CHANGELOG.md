@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/seuros/election_machines/compare/election_machines/v0.5.1...election_machines/v0.5.2) (2026-11-16)
+
+
+### Bug Fixes
+
+* fix wrapped classes at load so building a value runs no Ruby ([098786d](https://github.com/seuros/election_machines/commit/098786dd4a933eea2390ec28e489ac7599086e51))
+
 ## [0.5.1](https://github.com/seuros/election_machines/compare/election_machines/v0.5.0...election_machines/v0.5.1) (2026-11-16)
 
 
