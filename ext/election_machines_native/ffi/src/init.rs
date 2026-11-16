@@ -1,6 +1,6 @@
 //! Private native entry point.
 use magnus::{Error, Ruby, function, method, prelude::*};
-use matryona_machines::ruby::{Symbols, fencing, symbol};
+use matryona_machines::ruby::{Class, Symbols, fencing, symbol};
 
 use crate::election::Election;
 use crate::values::Family;
@@ -48,5 +48,6 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     class.define_private_method("native_elect", method!(Election::elect, 3))?;
     class.define_private_method("native_heartbeat", method!(Election::heartbeat, 4))?;
     class.define_private_method("native_resign", method!(Election::resign, 3))?;
-    Ok(())
+    // Fix magnus's class for Election now: building one later runs no Ruby.
+    Class::pin_wrapped::<Election>(ruby, class).map(drop)
 }
