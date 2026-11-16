@@ -145,8 +145,8 @@ module ElectionMachines
 
     type row = [Integer, Integer, Integer]
     type saved = [Integer, Integer, row?, Integer]
-    def self.native_with_scope: (Integer) -> Election
-    def self.native_restored: (Integer, _Checkpoint, Symbol) -> Election
+    private def self.native_with_scope: (Integer) -> Election
+    private def self.native_restored: (Integer, _Checkpoint, Symbol) -> Election
     def native_with_clock_policy: (Symbol) -> nil
     def native_lease: () -> row?
     def native_checkpoint: () -> saved
@@ -157,12 +157,12 @@ module ElectionMachines
 
   private
 
-  def self.native_raw: (Integer) -> nil
-  def self.native_token_scope: (_FencingToken) -> Integer
-  def self.native_token_order: (_FencingToken, _FencingToken) -> (-1 | 0 | 1)?
-  def self.native_token_newer: (_FencingToken, _FencingToken) -> bool
-  def self.native_lease: (owner, _FencingToken, nanoseconds) -> FencingToken
-  def self.native_held: (_Lease) -> Lease
-  def self.native_checkpoint: (scope, Integer, _Lease?, nanoseconds) -> Lease?
-  def self.lease_of: ([Integer, Integer, Integer]) -> Lease
+  private def self.native_raw: (Integer) -> nil
+  private def self.native_token_scope: (_FencingToken) -> Integer
+  private def self.native_token_order: (_FencingToken, _FencingToken) -> (-1 | 0 | 1)?
+  private def self.native_token_newer: (_FencingToken, _FencingToken) -> bool
+  private def self.native_lease: (owner, _FencingToken, nanoseconds) -> FencingToken
+  private def self.native_held: (_Lease) -> Lease
+  private def self.native_checkpoint: (scope, Integer, _Lease?, nanoseconds) -> Lease?
+  private def self.lease_of: ([Integer, Integer, Integer]) -> Lease
 end

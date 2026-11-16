@@ -1,4 +1,5 @@
 #![no_std]
+#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
 #![doc = include_str!("../README.md")]
 
 mod refusal;
@@ -138,12 +139,15 @@ impl Election {
     /// answers [`Leadership::Incumbent`] with the lease in force and changes
     /// nothing. Otherwise the smallest candidate is elected under a new token.
     ///
+    /// The election asks the authority for the live grant first
+    /// ([`LeaseAuthority::incumbent`]) and acquires only when there is none,
+    /// so the authority never has a live grant to refuse.
+    ///
     /// # Errors
     /// `NoCandidates` (checked first, whatever the clock), or the authority's
-    /// refusal of the grant: `Lease(ClockRegressed)`, `Lease(InvalidTtl)` or
-    /// `Lease(Exhausted)`. No other lease refusal arrives: `Occupied` and
-    /// `Held` are the live incumbent, which is honoured, and the rest belong
-    /// to calls `elect` does not make.
+    /// refusal, carried whole: `Lease(ClockRegressed)` or `Lease(InvalidTtl)`
+    /// (checked before the incumbent, as `acquire` checks them), then
+    /// `Lease(Exhausted)` for the grant.
     pub fn elect(
         &mut self,
         candidates: &[OwnerId],
@@ -152,37 +156,12 @@ impl Election {
     ) -> Result<Leadership, Refusal> {
         let nominee = candidates.iter().copied().min();
         let nominee = nominee.ok_or(Refusal::NoCandidates)?;
-        match self.authority.acquire(nominee, now, ttl) {
-            Ok(lease) => Ok(Leadership::Elected(lease)),
-            // Both name a grant that is unexpired at the instant the request
-            // was evaluated at; a refused acquire recorded nothing, so the
-            // incumbent answer records nothing either.
-            Err(refusal @ (LeaseRefusal::Occupied | LeaseRefusal::Held)) => {
-                if let Some(lease) = self.lease() {
-                    return Ok(Leadership::Incumbent(lease));
-                }
-                debug_assert!(
-                    false,
-                    "the authority answers Occupied and Held only about a grant it holds"
-                );
-                // Nothing changed: carry the authority's refusal as it came.
-                Err(Refusal::Lease(refusal))
-            }
-            // Listed in full, so a new lease refusal is decided here: is it
-            // an incumbent to honour, or a nomination refused?
-            Err(
-                refusal @ (LeaseRefusal::ClockRegressed
-                | LeaseRefusal::InvalidTtl
-                | LeaseRefusal::Exhausted
-                | LeaseRefusal::NoLease
-                | LeaseRefusal::WrongOwner
-                | LeaseRefusal::StaleToken
-                | LeaseRefusal::Unknown
-                | LeaseRefusal::Expired
-                | LeaseRefusal::Fenced
-                | LeaseRefusal::OutOfPhase),
-            ) => Err(Refusal::Lease(refusal)),
+        // A query records nothing, so the incumbent answer records nothing.
+        if let Some(lease) = self.authority.incumbent(now, ttl)? {
+            return Ok(Leadership::Incumbent(lease));
         }
+        let granted = self.authority.acquire(nominee, now, ttl);
+        granted.map(Leadership::Elected).map_err(Refusal::Lease)
     }
 
     /// Renew leadership only for the matching owner and live fencing token,

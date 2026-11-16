@@ -31,8 +31,10 @@ an external serialized durable authority**. Raft elections remain in
   arrive from none.
 - **A live incumbent is honoured, not refused.** `elect` answers
   `Ok(Leadership::Incumbent(lease))` with the lease in force, whoever the
-  candidates were, and changes nothing. That is what the authority's `Occupied`
-  and `Held` mean to an election, so `elect` never refuses with them.
+  candidates were, and changes nothing. `elect` asks the authority for the live
+  grant first (`LeaseAuthority::incumbent`, which checks the clock and the ttl
+  as `acquire` would) and acquires only when there is none, so the authority
+  never has a live grant to answer `Occupied` or `Held` for.
   `Ok(Leadership::Elected(lease))` is a new leader under a new token.
 - **An empty candidate list is a refusal**, `NoCandidates`, checked before the
   clock and whatever the incumbent: nobody was nominated, so nothing was

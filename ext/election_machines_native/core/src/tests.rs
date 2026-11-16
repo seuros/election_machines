@@ -1,5 +1,4 @@
 //! Contract tests, and a randomized comparison against a naive model.
-#![allow(clippy::unwrap_used)] // Failed test assumptions should panic.
 mod contract;
 mod model;
 mod random;

@@ -1,9 +1,10 @@
 //! Private native entry point.
 use magnus::{Error, Ruby, function, method, prelude::*};
-use matryona_machines::ruby::{Symbols, symbol};
+use matryona_machines::ruby::{Symbols, fencing, symbol};
 
 use crate::election::Election;
-use crate::{classes, names, values};
+use crate::values::Family;
+use crate::{classes, names};
 
 #[magnus::init]
 fn init(ruby: &Ruby) -> Result<(), Error> {
@@ -15,17 +16,20 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
         list
     };
     module.const_set("REFUSALS", symbols(&names::REFUSALS))?;
-    let clocks = names::ClockPolicies::ALL.iter();
-    let clocks = ruby.ary_from_iter(clocks.map(|v| names::ClockPolicies::symbol(ruby, *v)));
-    clocks.freeze();
-    module.const_set("CLOCK_POLICIES", clocks)?;
-    module.define_singleton_method("native_token_scope", function!(crate::token_scope, 1))?;
-    module.define_singleton_method("native_token_order", function!(crate::token_order, 2))?;
-    module.define_singleton_method("native_token_newer", function!(crate::token_newer, 2))?;
-    module.define_singleton_method("native_raw", function!(crate::validate_raw, 1))?;
-    module.define_singleton_method("native_lease", function!(values::validate_lease, 3))?;
-    module.define_singleton_method("native_held", function!(values::validate_held, 1))?;
-    let checkpoint = function!(values::validate_checkpoint, 4);
+    module.const_set("CLOCK_POLICIES", names::ClockPolicies::every(ruby))?;
+    let scope = function!(fencing::token_scope::<Family>, 1);
+    module.define_singleton_method("native_token_scope", scope)?;
+    let order = function!(fencing::token_order::<Family>, 2);
+    module.define_singleton_method("native_token_order", order)?;
+    let newer = function!(fencing::token_newer::<Family>, 2);
+    module.define_singleton_method("native_token_newer", newer)?;
+    let raw = function!(fencing::validate_raw::<Family>, 1);
+    module.define_singleton_method("native_raw", raw)?;
+    let lease = function!(fencing::validate_lease::<Family>, 3);
+    module.define_singleton_method("native_lease", lease)?;
+    let held = function!(fencing::own_lease::<Family>, 1);
+    module.define_singleton_method("native_held", held)?;
+    let checkpoint = function!(fencing::validate_checkpoint::<Family>, 4);
     module.define_singleton_method("native_checkpoint", checkpoint)?;
 
     let class = module.define_class("Election", ruby.class_object())?;

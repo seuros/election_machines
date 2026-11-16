@@ -2,14 +2,16 @@
 use std::cell::RefCell;
 
 use election_machines::{Leadership, Lease, OwnerId, Refusal};
-use magnus::{Error, IntoValue, Ruby, Value, prelude::*, typed_data::Obj};
+use magnus::{Error, Ruby, Value, prelude::*, typed_data::Obj};
 use matryona_machines::ruby::{
-    SymbolNames, Symbols, exact_array, instant, integer, keep, nanoseconds,
+    SymbolNames, Symbols, exact_array,
+    fencing::{self, checkpoint, checkpoint_row, lease_object, lease_row},
+    instant, integer, keep,
 };
 
 use crate::classes::classes;
-use crate::values::{self, lease_object};
-use crate::{names, row};
+use crate::names;
+use crate::values::Family;
 
 fn owner(value: Value) -> Result<OwnerId, Error> {
     integer(value, "owner").map(OwnerId::new)
@@ -28,7 +30,7 @@ impl Election {
     }
 
     pub fn restored(ruby: &Ruby, scope: Value, saved: Value, clock: Value) -> Result<Self, Error> {
-        let (scope, saved) = (integer(scope, "scope")?, values::checkpoint(ruby, saved)?);
+        let (scope, saved) = (integer(scope, "scope")?, checkpoint::<Family>(ruby, saved)?);
         Core::restored(scope, saved, names::ClockPolicies::parse(ruby, clock)?)
             .map(|core| Self(RefCell::new(core)))
             .ok_or_else(|| {
@@ -60,18 +62,14 @@ impl Election {
     }
 
     pub fn lease(ruby: &Ruby, this: &Self) -> Option<Value> {
-        this.0.borrow().lease().map(|held| row(ruby, held))
+        this.0
+            .borrow()
+            .lease()
+            .map(|held| lease_row::<Family>(ruby, held))
     }
 
     pub fn checkpoint(ruby: &Ruby, this: &Self) -> Value {
-        let saved = this.0.borrow().checkpoint();
-        (
-            saved.scope(),
-            saved.issued(),
-            saved.lease().map(|held| row(ruby, held)),
-            nanoseconds(ruby, saved.observed()),
-        )
-            .into_value_with(ruby)
+        checkpoint_row::<Family>(ruby, &this.0.borrow().checkpoint())
     }
 
     fn refused(ruby: &Ruby, refusal: Refusal) -> Value {
@@ -107,7 +105,7 @@ impl Election {
             };
             class
                 .get(ruby)
-                .funcall("new", (lease_object(ruby, lease)?,))
+                .funcall("new", (lease_object::<Family>(ruby, lease)?,))
         })
     }
 
@@ -120,7 +118,7 @@ impl Election {
         call: impl FnOnce(&mut Core) -> Result<Lease, Refusal>,
     ) -> Result<Value, Error> {
         keep(ruby, this, &this.0, call, |decision| match decision {
-            Ok(lease) => lease_object(ruby, lease),
+            Ok(lease) => lease_object::<Family>(ruby, lease),
             Err(refusal) => Ok(Self::refused(ruby, refusal)),
         })
     }
@@ -134,7 +132,7 @@ impl Election {
         ttl: Value,
     ) -> Result<Value, Error> {
         this.check_frozen()?;
-        let (owner, token) = (self::owner(owner)?, values::token(ruby, token)?);
+        let (owner, token) = (self::owner(owner)?, fencing::token::<Family>(ruby, token)?);
         let (now, ttl) = (instant(now, "now")?, instant(ttl, "ttl")?);
         Self::decide(ruby, this, |core| core.heartbeat(owner, token, now, ttl))
     }
@@ -147,7 +145,7 @@ impl Election {
         now: Value,
     ) -> Result<Value, Error> {
         this.check_frozen()?;
-        let (owner, token) = (self::owner(owner)?, values::token(ruby, token)?);
+        let (owner, token) = (self::owner(owner)?, fencing::token::<Family>(ruby, token)?);
         let now = instant(now, "now")?;
         Self::decide(ruby, this, |core| core.resign(owner, token, now))
     }
